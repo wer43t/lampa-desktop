@@ -41,7 +41,12 @@
   var UNSUPPORTED = /^audio\/x-(ac3|eac3|dts|true-hd|truehd|private|mlp)/i;
 
   var gst = { ok: false, checked: 0 };
-  var probes = {};      // "<hash>:<file>" -> probe json (per session)
+  var PROBE_KEY = 'desktop_audio_probe';
+  var MAX_PROBES = 300;
+  var PREFETCH_DELAY_MS = 15000;
+  var probes = {};      // "<hash>:<file>" -> probe json (memory copy of the stored ones)
+  var prefetchNet;      // separate request so a background probe never cancels a real one
+  var prefetchTimer;
   var forceAsk = {};    // torrent hash -> true: show the picker even if a choice is stored
   var network;
 
@@ -175,27 +180,76 @@
     });
   }
 
-  function loadProbe(src, done) {
+  // Tracks of a file never change, so probes are kept across restarts (only the fields we use).
+  function storedProbe(key) {
+    var all = Lampa.Storage.get(PROBE_KEY, '{}');
+    var hit = all && typeof all === 'object' ? all[key] : null;
+    return hit && hit.tracks ? { Tracks: hit.tracks } : null;
+  }
+
+  function storeProbe(key, probe) {
+    var all = Lampa.Storage.get(PROBE_KEY, '{}');
+    if (!all || typeof all !== 'object') all = {};
+    all[key] = {
+      u: Date.now(),
+      tracks: (probe.Tracks || []).filter(function (t) { return t.Type === 'audio'; }).map(function (t) {
+        return {
+          Type: t.Type, Index: t.Index, CapsName: t.CapsName, Codec: String(t.Codec || '').slice(0, 120),
+          Language: t.Language, Title: t.Title, Channels: t.Channels
+        };
+      })
+    };
+    var keys = Object.keys(all);
+    if (keys.length > MAX_PROBES) {
+      keys.sort(function (a, b) { return (all[a].u || 0) - (all[b].u || 0); });
+      keys.slice(0, keys.length - MAX_PROBES).forEach(function (k) { delete all[k]; });
+    }
+    Lampa.Storage.set(PROBE_KEY, all);
+  }
+
+  function loadProbe(src, done, request) {
     var key = src.hash + ':' + src.index;
+    if (!probes[key]) probes[key] = storedProbe(key);
     if (probes[key]) return done(probes[key]);
+    request = request || network;
 
     var finished = false;
     var finish = function (probe) {
       if (finished) return;
       finished = true;
       clearTimeout(timer);
-      if (probe) probes[key] = probe;
+      if (probe && probe.Tracks) {
+        probes[key] = probe;
+        storeProbe(key, probe);
+      }
       done(probe);
     };
     var timer = setTimeout(function () { finish(null); }, PROBE_TIMEOUT_MS + 2000);
 
     checkGst(function (ok) {
       if (!ok) return finish(null);
-      network.timeout(PROBE_TIMEOUT_MS);
-      network.silent(src.base + '/gst/' + src.hash + '/probe?index=' + src.index, finish, function () {
+      request.timeout(PROBE_TIMEOUT_MS);
+      request.silent(src.base + '/gst/' + src.hash + '/probe?index=' + src.index, finish, function () {
         finish(null);
       });
     });
+  }
+
+  // While an episode plays, probe the next one so auto-advance doesn't wait for it.
+  function onStart(data) {
+    clearTimeout(prefetchTimer);
+    if (!data || !data.torrent_hash || preferred() === 'off' || usesExternalPlayer(data)) return;
+    prefetchTimer = setTimeout(function () {
+      var list = Lampa.PlayerPlaylist.get() || [];
+      var current = String(data.timeline && data.timeline.hash || '');
+      var at = -1;
+      for (var i = 0; i < list.length; i++) {
+        if (list[i] && list[i].timeline && String(list[i].timeline.hash) === current) { at = i; break; }
+      }
+      var next = at >= 0 ? list[at + 1] : null;
+      var src = next && parseStream(next.url);
+      if (src) loadProbe(src, function () {}, prefetchNet);
+    }, PREFETCH_DELAY_MS);
   }
 
   function pickTrack(tracks, lang, onPick, onCancel) {
@@ -286,7 +340,9 @@
 
   whenReady(function () {
     network = new Lampa.Reguest();
+    prefetchNet = new Lampa.Reguest();
     Lampa.Player.listener.follow('create', onCreate);
+    Lampa.Player.listener.follow('start', onStart);
     Lampa.Listener.follow('torrent_file', onTorrentFile);
   });
 })();
