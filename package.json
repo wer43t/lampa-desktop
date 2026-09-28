@@ -5,7 +5,7 @@
   "description": "Приложение для просмотров фильмов и сериалов",
   "repository": {
     "type": "git",
-    "url": "https://github.com/GideonWhite1029/lampa-desktop"
+    "url": "https://github.com/wer43t/lampa-desktop"
   },
   "main": "src/index.js",
   "scripts": {

@@ -103,7 +103,7 @@ const build = ({
       label: 'Справка',
       submenu: [
         { label: 'Исходники Lampa', click: () => shell.openExternal('https://github.com/yumata/lampa-source') },
-        { label: 'Проект на GitHub', click: () => shell.openExternal('https://github.com/GideonWhite1029/lampa-desktop') }
+        { label: 'Проект на GitHub', click: () => shell.openExternal('https://github.com/wer43t/lampa-desktop') }
       ]
     }
   ];
