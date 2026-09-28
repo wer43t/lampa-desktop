@@ -13,6 +13,10 @@ if (require('electron-squirrel-startup')) {
   app.quit();
 }
 
+// Expose HTMLMediaElement.audioTracks so Lampa's player can list and switch
+// the audio tracks (voice-overs) of multi-track files streamed from TorrServer.
+app.commandLine.appendSwitch('enable-blink-features', 'AudioVideoTracks');
+
 let mainWindow;
 let miniPlayerPrev = null;
 let psbId = null;
