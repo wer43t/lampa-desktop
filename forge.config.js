@@ -21,15 +21,15 @@ const makers = [
     name: '@electron-forge/maker-deb',
     platforms: ['linux'],
     config: {
-      maintainer: 'GideonWhite1029',
-      homepage: 'https://github.com/GideonWhite1029/lampa-desktop'
+      maintainer: 'wer43t',
+      homepage: 'https://github.com/wer43t/lampa-desktop'
     },
   },
   {
     name: '@electron-forge/maker-rpm',
     platforms: ['linux'],
     config: {
-      homepage: 'https://github.com/GideonWhite1029/lampa-desktop'
+      homepage: 'https://github.com/wer43t/lampa-desktop'
     },
   }
 ];
@@ -90,7 +90,7 @@ if (!skip('WIX')) {
     platforms: ['win32'],
     config: {
       name: 'Lampa',
-      manufacturer: 'GideonWhite1029',
+      manufacturer: 'wer43t',
       exe: 'lampa',
       icon: 'icons/og.ico',
       shortcutFolderName: 'Lampa',
@@ -135,7 +135,7 @@ module.exports = {
       name: '@electron-forge/publisher-github',
       config: {
         repository: {
-          owner: 'GideonWhite1029',
+          owner: 'wer43t',
           name: 'lampa-desktop'
         },
         prerelease: false,

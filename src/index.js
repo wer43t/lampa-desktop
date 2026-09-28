@@ -355,7 +355,7 @@ app.whenReady().then(async () => {
     updateElectronApp({
       updateSource: {
         type: UpdateSourceType.ElectronPublicUpdateService,
-        repo: 'GideonWhite1029/lampa-desktop'
+        repo: 'wer43t/lampa-desktop'
       },
       updateInterval: '1 hour',
       logger: log
