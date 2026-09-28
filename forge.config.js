@@ -91,6 +91,10 @@ if (!skip('WIX')) {
     config: {
       name: 'Lampa',
       manufacturer: 'wer43t',
+      // Russian UI strings and the Cyrillic description need code page 1251: the default
+      // (en-US, 1252) fails with LGHT0311. ru-RU WixUI localization sets the code page.
+      language: 1049,
+      cultures: 'ru-RU',
       exe: 'lampa',
       icon: 'icons/og.ico',
       shortcutFolderName: 'Lampa',
