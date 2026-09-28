@@ -107,7 +107,7 @@ module.exports = {
   packagerConfig: {
     author: "ymata, GideonWhite1029",
     description: "Приложение для просмотров фильмов и сериалов",
-    arch: ["x64", "ia32"],
+    arch: ["x64"], // Electron 44+ has no 32-bit Windows build
     platform: ["win32", "linux", "darwin"],
     asar: true,
     executableName: "lampa",
