@@ -29,6 +29,10 @@
   var autoplay = null;    // { torrent_hash, file_id, until }
   var network;
   var opener;           // separate from `network` so cancelling it never drops a timecode
+  var warmer;
+  var warmTimer;
+  var WARM_EVERY_MS = 20000;
+  var WARM_MAX_MS = 10 * 60 * 1000;
 
   function whenReady(cb) {
     if (window.Lampa && Lampa.Listener && Lampa.Timeline && Lampa.Timeline.listener &&
@@ -137,6 +141,13 @@
     if (e.type === 'list_close') {
       lastTorrent = null;
       return;
+    }
+
+    // TorrServer's preload fills the cache from the start of the file (~20 s on a cold
+    // torrent), which is wasted when playback resumes mid-file: start streaming right away.
+    if (e.type === 'render' && e.element && typeof e.element.url === 'string') {
+      var view = e.element.timeline;
+      if (view && view.time > 30 && view.percent < 90) e.element.url = e.element.url.replace('&preload', '&play');
     }
 
     if (e.type === 'render' && autoplay && e.element && e.item) {
@@ -270,6 +281,29 @@
     btn.find('span').text('Продолжить' + (parts.length ? ' · ' + parts.join(' · ') : ''));
     btn.on('hover:enter', function () { resume(movie); });
     buttons.prepend(btn);
+
+    warm(rec.torrent_hash, movie);
+  }
+
+  // A cold torrent needs 10-25 s to find and connect peers before the first byte, so wake
+  // it up as soon as its card opens, and keep it awake (TorrServer drops idle torrents after
+  // ~30 s) while that card stays open. Without a reader TorrServer downloads nothing.
+  function warm(hash, movie) {
+    clearInterval(warmTimer);
+    var base = Lampa.Torserver.url();
+    if (!base) return;
+    var until = Date.now() + WARM_MAX_MS;
+    var ping = function () {
+      var a = Lampa.Activity.active() || {};
+      if (Date.now() > until || a.component !== 'full' || String(a.id) !== String(movie.id)) {
+        clearInterval(warmTimer);
+        return;
+      }
+      warmer.timeout(10000);
+      warmer.silent(base + '/stream?link=' + hash + '&stat', function () {}, function () {});
+    };
+    ping();
+    warmTimer = setInterval(ping, WARM_EVERY_MS);
   }
 
   function scan(root) {
@@ -282,6 +316,7 @@
   whenReady(function () {
     network = new Lampa.Reguest();
     opener = new Lampa.Reguest();
+    warmer = new Lampa.Reguest();
 
     // TorrServer's stored timecodes are only read by Lampa with this on; default it once.
     if (!Lampa.Storage.get('desktop_tracktimecode_seeded', false)) {
