@@ -306,11 +306,70 @@
     warmTimer = setInterval(ping, WARM_EVERY_MS);
   }
 
+  function episodeHash(season, episode, name) {
+    return String(Lampa.Utils.hash([season, season > 10 ? ':' : '', episode, name].join('')));
+  }
+
+  function lastEpisode(card) {
+    var name = card.original_name;
+    if (!name) return null;
+    var best = null;
+
+    var views = Lampa.Storage.get(Lampa.Timeline.filename(), '{}') || {};
+    var seasons = Math.min(card.number_of_seasons || 30, 40);
+    for (var s = 1; s <= seasons; s++) {
+      for (var e = 1; e <= 60; e++) {
+        var road = views[episodeHash(s, e, name)];
+        if (!road || typeof road !== 'object' || !(road.percent > 0 || road.time > 0)) continue;
+        var t = road.updated || 0;
+        if (!best || t > best.t || (t === best.t && s * 1000 + e > best.season * 1000 + best.episode)) {
+          best = { season: s, episode: e, t: t };
+        }
+      }
+    }
+
+    var rec = getRecord(movieKey(card));
+    if (rec && rec.season && rec.episode && (!best || (rec.updated || 0) >= best.t)) {
+      best = { season: rec.season, episode: rec.episode, t: rec.updated || 0 };
+    }
+    return best;
+  }
+
+  function fixWatched(block) {
+    if (block.__desktopResume) return;
+    block.__desktopResume = true;
+
+    var node = block.parentNode;
+    while (node && !node.card_data) node = node.parentNode;
+    var card = node && node.card_data;
+    if (!card) return;
+
+    var last = lastEpisode(card);
+    var body = block.querySelector('.card-watched__body');
+    if (!last || !body) return;
+
+    var view = Lampa.Timeline.view(episodeHash(last.season, last.episode, card.original_name));
+    var span = document.createElement('span');
+    span.textContent = 'S' + last.season + 'E' + last.episode +
+      (view.time > 0 && view.percent < 100 ? ' · ' + Lampa.Utils.secondsToTime(view.time) : '');
+    var item = document.createElement('div');
+    item.className = 'card-watched__item';
+    item.appendChild(span);
+    item.appendChild(Lampa.Timeline.render(view)[0]);
+
+    body.innerHTML = '';
+    body.appendChild(item);
+  }
+
   function scan(root) {
     if (!root || !root.querySelectorAll) return;
     if (root.classList && root.classList.contains('watched-history')) decorate(root);
     var found = root.querySelectorAll('.watched-history');
     for (var i = 0; i < found.length; i++) decorate(found[i]);
+
+    if (root.classList && root.classList.contains('card-watched')) fixWatched(root);
+    var watched = root.querySelectorAll('.card-watched');
+    for (var j = 0; j < watched.length; j++) fixWatched(watched[j]);
   }
 
   whenReady(function () {
