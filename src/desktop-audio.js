@@ -86,6 +86,150 @@
     return src.base + '/gst/' + src.hash + '/master.m3u8?index=' + src.index + '&audio=' + audio;
   }
 
+  function directUrl(src) {
+    return src.base + '/stream/video?link=' + src.hash + '&index=' + src.index + '&play';
+  }
+
+  var MAX_SKIPS = 15;
+  var STALL_MS = 10000;
+  var recover = { data: null, skips: 0, busy: false, seek: -1, armed: false, stallAt: -1, stallSince: 0 };
+
+  function getText(url, done) {
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', url, true);
+    xhr.timeout = 15000;
+    xhr.onload = function () { done(xhr.status === 200 ? xhr.responseText : ''); };
+    xhr.onerror = xhr.ontimeout = function () { done(''); };
+    xhr.send();
+  }
+
+  function segments(src, gstStream, done) {
+    getText(gstStream, function (master) {
+      var variant = (master.split('\n').filter(function (l) { return l && l.charAt(0) !== '#'; })[0] || '').trim();
+      if (!variant) return done([]);
+      if (variant.charAt(0) === '/') variant = src.base + variant;
+      else if (!/^https?:/i.test(variant)) variant = gstStream.replace(/[^/]*$/, '') + variant;
+      getText(variant, function (text) {
+        var list = [];
+        var t = 0;
+        text.split('\n').forEach(function (line) {
+          var m = line.match(/^#EXTINF:([\d.]+)/);
+          if (m) {
+            var d = parseFloat(m[1]) || 0;
+            list.push({ start: t, end: t + d });
+            t += d;
+          }
+        });
+        done(list);
+      });
+    });
+  }
+
+  function bufferedEnd(video) {
+    var pos = video.currentTime || 0;
+    try {
+      for (var i = 0; i < video.buffered.length; i++) {
+        if (video.buffered.start(i) <= pos + 0.5 && video.buffered.end(i) >= pos) return video.buffered.end(i);
+      }
+    } catch (err) {}
+    return pos;
+  }
+
+  function nativeAudio(src, gstStream) {
+    var audio = parseInt((gstStream.match(/[?&]audio=(\d+)/) || [])[1] || '0', 10);
+    var probe = probes[src.hash + ':' + src.index] || storedProbe(src.hash + ':' + src.index);
+    var tracks = audioTracks(probe);
+    var track = tracks.filter(function (t) { return t.Index === audio; })[0];
+    return !!track && isNative(track) && track === tracks[0];
+  }
+
+  function playUrl(url) {
+    Lampa.PlayerVideo.destroy(true);
+    Lampa.PlayerVideo.url(url, true);
+    recover.busy = false;
+  }
+
+  function goDirect(data, src) {
+    data.url = data.__desktop_direct || directUrl(src);
+    recover.seek = recover.position;
+    playUrl(data.url);
+    if (!nativeAudio(src, recover.gstStream)) {
+      Lampa.Noty.show('Перекодирование не удалось, воспроизведение напрямую. Звука выбранной озвучки может не быть.');
+    }
+  }
+
+  function recoverFrom(data, src, edge) {
+    if (recover.data !== data) {
+      recover.data = data;
+      recover.skips = 0;
+    }
+    recover.position = edge;
+    recover.gstStream = data.url;
+    recover.busy = true;
+    recover.armed = false;
+
+    if (nativeAudio(src, data.url) || recover.skips >= MAX_SKIPS) return goDirect(data, src);
+
+    segments(src, data.url, function (list) {
+      if (Lampa.Player.playdata() !== data) {
+        recover.busy = false;
+        return;
+      }
+      var probe = edge + 0.01;
+      var bad = list.filter(function (s) { return s.start <= probe && s.end > probe; })[0];
+      if (!bad) return goDirect(data, src);
+      recover.skips++;
+      recover.seek = bad.end + 0.05;
+      console.log('DesktopAudio', 'gst segment failed, skip', bad.start.toFixed(2), '->', recover.seek.toFixed(2));
+      playUrl(data.url);
+    });
+  }
+
+  function gstPlaying() {
+    var data = Lampa.Player.playdata && Lampa.Player.playdata();
+    var src = data && parseStream(data.url);
+    return src && src.gst && !data.url_reserve ? { data: data, src: src } : null;
+  }
+
+  function onVideoError(e) {
+    if (!e || !e.fatal || recover.busy) return;
+    var cur = gstPlaying();
+    if (!cur) return;
+    var video = Lampa.PlayerVideo.video();
+    var edge = recover.seek >= 0 ? recover.seek : video ? bufferedEnd(video) : 0;
+    recover.seek = -1;
+    recoverFrom(cur.data, cur.src, edge);
+  }
+
+  function watchdog() {
+    var video = Lampa.PlayerVideo.video();
+    var cur = recover.armed && !recover.busy && video && gstPlaying();
+    if (!cur || video.paused || video.seeking || video.ended) {
+      recover.stallAt = -1;
+      return;
+    }
+    var pos = video.currentTime || 0;
+    if (pos !== recover.stallAt) {
+      recover.stallAt = pos;
+      recover.stallSince = Date.now();
+      return;
+    }
+    if (Date.now() - recover.stallSince < STALL_MS) return;
+    if (bufferedEnd(video) - pos > 1) return;
+    recover.stallAt = -1;
+    console.log('DesktopAudio', 'gst playback stalled at', pos.toFixed(2));
+    recoverFrom(cur.data, cur.src, bufferedEnd(video));
+  }
+
+  function onVideoLoaded() {
+    recover.armed = true;
+    recover.stallAt = -1;
+    if (recover.seek < 0) return;
+    var to = recover.seek;
+    recover.seek = -1;
+    if (to > 1) Lampa.PlayerVideo.to(to);
+  }
+
   // --- tracks ----------------------------------------------------------------
 
   function audioTracks(probe) {
@@ -238,6 +382,13 @@
   // While an episode plays, probe the next one so auto-advance doesn't wait for it.
   function onStart(data) {
     clearTimeout(prefetchTimer);
+    if (recover.data !== data) {
+      recover.data = data;
+      recover.skips = 0;
+      recover.seek = -1;
+      recover.busy = false;
+      recover.armed = false;
+    }
     if (!data || !data.torrent_hash || preferred() === 'off' || usesExternalPlayer(data)) return;
     prefetchTimer = setTimeout(function () {
       var list = Lampa.PlayerPlaylist.get() || [];
@@ -287,6 +438,7 @@
     var cancelled = false;
     var start = function (audio) {
       if (audio >= 0) {
+        if (!src.gst) data.__desktop_direct = data.url;
         data.url = gstUrl(src, audio);
         data.hls_manifest_timeout = 60000;
       }
@@ -343,6 +495,9 @@
     prefetchNet = new Lampa.Reguest();
     Lampa.Player.listener.follow('create', onCreate);
     Lampa.Player.listener.follow('start', onStart);
+    Lampa.PlayerVideo.listener.follow('error', onVideoError);
+    Lampa.PlayerVideo.listener.follow('loadeddata', onVideoLoaded);
+    setInterval(watchdog, 1000);
     Lampa.Listener.follow('torrent_file', onTorrentFile);
   });
 })();
